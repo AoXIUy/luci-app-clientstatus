@@ -1,4 +1,4 @@
-﻿name: 构建 OpenWrt 软件包
+name: 构建 OpenWrt 软件包
 
 # ─── 触发条件 ────────────────────────────────────────────
 on:
@@ -79,10 +79,8 @@ jobs:
 
       - name: 解压 SDK
         run: |
-          tar -xaf "${SDK_FILE}"
-          mv openwrt-sdk-* sdk
-
-      - name: 配置 Feeds（仅 src-link，完全跳过 git.openwrt.org）
+          mkdir sdk
+          tar -xaf "${SDK_FILE}" --strip-components=1 -C sdk
         working-directory: sdk
         run: |
           # 只注册本地 src-link，feeds update 无需网络
@@ -152,8 +150,8 @@ jobs:
 
       - name: 解压 SDK
         run: |
-          tar -xaf "${SDK_FILE}"
-          mv openwrt-sdk-* sdk
+          mkdir sdk
+          tar -xaf "${SDK_FILE}" --strip-components=1 -C sdk
 
       - name: 下载 luci.mk（仅单文件，不克隆整个 LuCI 仓库）
         run: |
