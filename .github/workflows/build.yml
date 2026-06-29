@@ -1,0 +1,170 @@
+﻿name: 构建 OpenWrt 软件包
+
+# ─── 触发条件 ────────────────────────────────────────────
+# 推送 v* 标签时自动构建并发布 Release；支持手动触发仅构建不发布
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  # ════════════════════════════════════════════════════════
+  # 构建任务：矩阵并行，覆盖全平台
+  # ════════════════════════════════════════════════════════
+  build:
+    name: Build [${{ matrix.sdk }}] ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # 一个架构失败不影响其他
+      matrix:
+        include:
+          # ── OpenWrt 23.05 (opkg · .ipk) ──────────────────────
+          - sdk: openwrt-23.05
+            arch: x86_64
+            luci_branch: openwrt-23.05
+
+          - sdk: openwrt-23.05
+            arch: aarch64_cortex-a53
+            luci_branch: openwrt-23.05
+
+          - sdk: openwrt-23.05
+            arch: arm_cortex-a7_neon-vfpv4
+            luci_branch: openwrt-23.05
+
+          - sdk: openwrt-23.05
+            arch: mipsel_24kc
+            luci_branch: openwrt-23.05
+
+          - sdk: openwrt-23.05
+            arch: mips_24kc
+            luci_branch: openwrt-23.05
+
+          # ── OpenWrt 24.10 (apk · .apk) ───────────────────────
+          - sdk: openwrt-24.10
+            arch: x86_64
+            luci_branch: openwrt-24.10
+
+          - sdk: openwrt-24.10
+            arch: aarch64_cortex-a53
+            luci_branch: openwrt-24.10
+
+          - sdk: openwrt-24.10
+            arch: arm_cortex-a7_neon-vfpv4
+            luci_branch: openwrt-24.10
+
+          - sdk: openwrt-24.10
+            arch: mipsel_24kc
+            luci_branch: openwrt-24.10
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # openwrt/gh-action-sdk 会自动：
+      #   1. 拉取对应版本/架构的 OpenWrt SDK Docker 镜像
+      #   2. 将仓库根目录下的各子目录作为本地 feed 注册
+      #   3. 安装 EXTRA_FEEDS 中指定的额外 feed（此处为 LuCI）
+      #   4. 编译 PACKAGES 列出的软件包
+      - name: 构建软件包
+        uses: openwrt/gh-action-sdk@v7
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: clientstatus_feed
+          PACKAGES: clientstatus luci-app-clientstatus
+          # luci-app-clientstatus 依赖 feeds/luci/luci.mk，必须注入 LuCI feed
+          EXTRA_FEEDS: src-git luci https://git.openwrt.org/project/luci.git;${{ matrix.luci_branch }}
+          NO_REFRESH_CHECK: "true"
+          IGNORE_ERRORS: "false"
+
+      - name: 收集构建产物
+        run: |
+          mkdir -p artifacts
+          # 同时处理 .ipk (23.05) 和 .apk (24.10) 格式
+          find bin/packages/ \( -name "*.ipk" -o -name "*.apk" \) | while read -r f; do
+            cp "$f" artifacts/
+          done
+          echo "── 本次构建产物 (${{ matrix.arch }} · ${{ matrix.sdk }}) ──"
+          ls -lh artifacts/
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          # 以 架构-版本 命名，避免不同矩阵间产物覆盖
+          name: packages-${{ matrix.arch }}-${{ matrix.sdk }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+  # ════════════════════════════════════════════════════════
+  # 发布任务：汇总所有产物，创建 GitHub Release
+  # 仅在推送 v* 标签时运行
+  # ════════════════════════════════════════════════════════
+  release:
+    name: 发布 GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: 下载所有架构的构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: all-packages/
+          # merge-multiple=true：将多个 artifact 合并到同一目录
+          # 文件名含架构字段，不会冲突；all 架构的 luci-app 同名会被覆盖（内容一致）
+          merge-multiple: true
+
+      - name: 整理发布文件
+        run: |
+          mkdir -p release-files
+          find all-packages/ \( -name "*.ipk" -o -name "*.apk" \) | sort | while read -r f; do
+            cp "$f" release-files/
+          done
+          echo "=== 最终发布文件列表 ==="
+          ls -lh release-files/
+
+      - name: 创建 Release 并上传软件包
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          generate_release_notes: true
+          body: |
+            ## 📦 软件包说明
+
+            本 Release 包含 `clientstatus` 守护进程和 `luci-app-clientstatus` 界面两个软件包，
+            支持 OpenWrt **23.05**（`.ipk`）和 **24.10+**（`.apk`）两种格式。
+
+            ---
+
+            ### 安装方法
+
+            **OpenWrt 23.05 — opkg**
+            ```sh
+            opkg install clientstatus_*.ipk
+            opkg install luci-app-clientstatus_*.ipk
+            ```
+
+            **OpenWrt 24.10+ — apk**
+            ```sh
+            apk add --allow-untrusted clientstatus_*.apk
+            apk add --allow-untrusted luci-app-clientstatus_*.apk
+            ```
+
+            > ℹ️ `luci-app-clientstatus_*_all.ipk/.apk` 为架构无关包，所有平台通用。
+            > 安装完成后请退出并重新登录 LuCI Web 界面。
+            > 若界面菜单未显示，请安装 `luci-compat`。
+
+            ---
+
+            ### 支持的架构
+
+            | 架构 | 代表设备 |
+            |---|---|
+            | `x86_64` | x86 软路由、PVE / ESXi 虚拟机 |
+            | `aarch64_cortex-a53` | RaspberryPi 3/4、NanoPi R4S、BPi-R3 |
+            | `arm_cortex-a7_neon-vfpv4` | MT7622、联发科 ARM 系列 |
+            | `mipsel_24kc` | MT7620 / MT7628（极路由等）|
+            | `mips_24kc` | Atheros AR71xx（TP-Link 经典款）|

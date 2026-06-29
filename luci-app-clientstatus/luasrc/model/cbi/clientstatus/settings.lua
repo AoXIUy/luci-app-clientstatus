@@ -33,9 +33,9 @@ o.datatype = "and(uinteger,min(20))"
 o.rmempty = false
 
 
-o = s:option(ListValue, "lan_iface", translate("LAN Interface"),
-	translate("Network interface to scan for clients. Usually br-lan."))
-o.widget = "select"
+o = s:option(MultiValue, "lan_iface", translate("LAN Interface"),
+	translate("Network interfaces to scan for clients. Select one or more interfaces (e.g. br-lan, br-guest)."))
+o.widget = "checkbox"
 
 local ifaces = get_interface_list()
 for _, iface in ipairs(ifaces) do

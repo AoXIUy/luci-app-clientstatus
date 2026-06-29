@@ -31,6 +31,7 @@
 #define MAX_DHCP    512
 #define MAX_CLI     512
 #define MAX_AP      32
+#define MAX_LAN     8       /* max LAN interfaces */
 #define MAX_LINE    4096
 #define MAX_FORK    64      /* max concurrent ping child processes */
 #define ML  18      /* MAC_LEN  */
@@ -68,12 +69,25 @@ typedef struct { pid_t pid; char ip[IL]; } PingRun;
 /* ─── Globals ────────────────────────────────────────── */
 
 static int  g_interval = DEF_INTERVAL;
-static char g_lan[32]  = DEF_LAN;
+
+/* 多LAN接口支持：接口名列表 */
+static char g_lans[MAX_LAN][32];
+static int  g_lans_n = 0;
+
+/* 向后兼容：主LAN（第一个接口）快捷方式 */
+static char *g_lan = g_lans[0];
+
+/* 每个LAN接口的子网信息 */
+typedef struct {
+    uint32_t net, mask;
+    char ip[IL];
+    int  prefix;
+} LanInfo;
+static LanInfo g_lan_info[MAX_LAN];
+static int     g_lan_info_n = 0;
+
 static int  g_has_wifi, g_ct_thresh = 6840;
 static int  g_wifi_byte_stats;  /* 0=undetermined, 1=enabled, -1=conntrack */
-static uint32_t g_lan_net, g_lan_mask;
-static char g_lan_ip[IL];
-static int  g_lan_prefix;
 
 static IpE  g_ct[MAX_CT];     static int g_ct_n;
 static WfE  g_wf[MAX_WIFI];   static int g_wf_n;
@@ -90,10 +104,13 @@ static volatile sig_atomic_t g_usr1, g_run = 1;
 static void on_usr1(int s) { (void)s; g_usr1 = 1; }
 static void on_term(int s) { (void)s; g_run = 0; }
 
+/* 检查IP是否属于任意一个已配置的LAN子网 */
 static int in_lan(const char *ip) {
     struct in_addr a;
     if (!ip || !*ip || !inet_aton(ip, &a)) return 0;
-    return (a.s_addr & g_lan_mask) == g_lan_net;
+    for (int i = 0; i < g_lan_info_n; i++)
+        if ((a.s_addr & g_lan_info[i].mask) == g_lan_info[i].net) return 1;
+    return 0;
 }
 
 static int ip_hit(const IpE *s, int n, const char *ip) {
@@ -169,22 +186,29 @@ static void fmt_dur(int s, char *b, int l) {
 
 /* ─── LAN subnet ─────────────────────────────────────── */
 
+/* 初始化所有已配置LAN接口的子网信息，至少一个成功即返回0 */
 static int init_lan(void) {
     struct ifaddrs *ifa, *p;
     if (getifaddrs(&ifa) < 0) return -1;
-    for (p = ifa; p; p = p->ifa_next) {
-        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
-        if (strcmp(p->ifa_name, g_lan) != 0) continue;
-        struct sockaddr_in *a = (void *)p->ifa_addr;
-        struct sockaddr_in *m = (void *)p->ifa_netmask;
-        g_lan_net  = a->sin_addr.s_addr & m->sin_addr.s_addr;
-        g_lan_mask = m->sin_addr.s_addr;
-        inet_ntop(AF_INET, &a->sin_addr, g_lan_ip, IL);
-        uint32_t mv = ntohl(m->sin_addr.s_addr);
-        for (g_lan_prefix = 0; mv & 0x80000000; mv <<= 1) g_lan_prefix++;
-        freeifaddrs(ifa); return 0;
+    g_lan_info_n = 0;
+    for (int li = 0; li < g_lans_n; li++) {
+        for (p = ifa; p; p = p->ifa_next) {
+            if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
+            if (strcmp(p->ifa_name, g_lans[li]) != 0) continue;
+            struct sockaddr_in *a = (void *)p->ifa_addr;
+            struct sockaddr_in *m = (void *)p->ifa_netmask;
+            LanInfo *li_info = &g_lan_info[g_lan_info_n];
+            li_info->net  = a->sin_addr.s_addr & m->sin_addr.s_addr;
+            li_info->mask = m->sin_addr.s_addr;
+            inet_ntop(AF_INET, &a->sin_addr, li_info->ip, IL);
+            uint32_t mv = ntohl(m->sin_addr.s_addr);
+            for (li_info->prefix = 0; mv & 0x80000000; mv <<= 1) li_info->prefix++;
+            g_lan_info_n++;
+            break;
+        }
     }
-    freeifaddrs(ifa); return -1;
+    freeifaddrs(ifa);
+    return (g_lan_info_n > 0) ? 0 : -1;
 }
 
 static void init_ct_thresh(void) {
@@ -274,11 +298,16 @@ static void build_ap(void) {
 
 static void flush_neigh(void) {
     char cmd[128];
-    snprintf(cmd, sizeof cmd, "ip -4 neigh flush dev %s >/dev/null 2>&1", g_lan);
-    system(cmd);
+    /* 刷新所有已配置的LAN接口 */
+    for (int li = 0; li < g_lans_n; li++) {
+        snprintf(cmd, sizeof cmd,
+            "ip -4 neigh flush dev %s > /dev/null 2>&1", g_lans[li]);
+        system(cmd);
+    }
+    /* 刷新WiFi AP接口 */
     for (int i = 0; i < g_ap_n; i++) {
         snprintf(cmd, sizeof cmd,
-            "ip -4 neigh flush dev %s >/dev/null 2>&1", g_ap[i].ifn);
+            "ip -4 neigh flush dev %s > /dev/null 2>&1", g_ap[i].ifn);
         system(cmd);
     }
 }
@@ -356,6 +385,13 @@ static void collect_wifi(void) {
     }
 }
 
+/* 判断设备名是否在已配置的LAN接口列表中 */
+static int is_lan_dev(const char *dv) {
+    for (int i = 0; i < g_lans_n; i++)
+        if (strcmp(g_lans[i], dv) == 0) return 1;
+    return 0;
+}
+
 static void collect_arp(void) {
     FILE *f = fopen("/proc/net/arp", "r");
     char line[256];
@@ -366,7 +402,8 @@ static void collect_arp(void) {
         char ip[IL], hw[16], fg[16], mac[ML], mk[16], dv[32];
         if (sscanf(line, "%15s %15s %15s %17s %15s %31s",
                    ip, hw, fg, mac, mk, dv) < 6) continue;
-        if (strcmp(dv, g_lan) != 0) continue;
+        /* 匹配任意已配置的LAN接口 */
+        if (!is_lan_dev(dv)) continue;
         if (strcmp(mac, "00:00:00:00:00:00") == 0) continue;
         if (!in_lan(ip)) continue;
         upper(mac);
@@ -685,8 +722,15 @@ static void merge_and_output(void) {
     strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", tm);
 
     fprintf(fout, "# Client Status — %s\n", ts);
-    fprintf(fout, "# Refresh interval: %ds  |  LAN: %s (%s/%d)\n",
-            g_interval, g_lan, g_lan_ip, g_lan_prefix);
+    /* 输出所有已配置的LAN接口信息 */
+    fprintf(fout, "# Refresh interval: %ds  |  LAN:", g_interval);
+    for (int li = 0; li < g_lans_n; li++) {
+        const char *ip_s = (li < g_lan_info_n) ? g_lan_info[li].ip : "?";
+        int pfx = (li < g_lan_info_n) ? g_lan_info[li].prefix : 0;
+        fprintf(fout, "%s %s (%s/%d)",
+                (li == 0) ? " " : ", ", g_lans[li], ip_s, pfx);
+    }
+    fprintf(fout, "\n");
 
     /* WiFi status: three-way branch */
     if (!g_has_wifi)
@@ -752,10 +796,31 @@ int main(void) {
     sigaction(SIGINT, &sa, NULL);
 
     g_interval = uci_int("clientstatus.main.interval", DEF_INTERVAL);
-    uci_str("clientstatus.main.lan_iface", g_lan, sizeof g_lan, DEF_LAN);
+
+    /* 读取多值 UCI list lan_iface，每行一个接口名 */
+    {
+        FILE *uf = popen("uci -q get clientstatus.main.lan_iface 2>/dev/null", "r");
+        if (uf) {
+            char buf[64];
+            while (fgets(buf, sizeof buf, uf) && g_lans_n < MAX_LAN) {
+                trim(buf);
+                if (buf[0]) {
+                    strncpy(g_lans[g_lans_n], buf, 31);
+                    g_lans[g_lans_n][31] = '\0';
+                    g_lans_n++;
+                }
+            }
+            pclose(uf);
+        }
+        /* 若未读到任何接口，使用默认值 */
+        if (g_lans_n == 0) {
+            strncpy(g_lans[0], DEF_LAN, 31);
+            g_lans_n = 1;
+        }
+    }
 
     if (init_lan() < 0) {
-        fprintf(stderr, "clientstatus: cannot get LAN address for %s\n", g_lan);
+        fprintf(stderr, "clientstatus: cannot get LAN address for any configured interface\n");
         return 1;
     }
     init_ct_thresh();
