@@ -1,7 +1,6 @@
-name: 构建 OpenWrt 软件包
+﻿name: 构建 OpenWrt 软件包
 
 # ─── 触发条件 ────────────────────────────────────────────
-# 推送 v* 标签时自动构建并发布 Release；支持手动触发仅构建不发布
 on:
   push:
     tags:
@@ -10,100 +9,110 @@ on:
 
 jobs:
   # ════════════════════════════════════════════════════════
-  # 构建任务：矩阵并行，覆盖全平台
+  # Job 1: 编译 clientstatus C 守护进程
+  # 无需 LuCI feed，9 个架构并行
   # ════════════════════════════════════════════════════════
-  build:
-    name: Build [${{ matrix.sdk }}] ${{ matrix.arch }}
+  build-daemon:
+    name: Daemon [${{ matrix.sdk }}] ${{ matrix.arch }}
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false   # 一个架构失败不影响其他
+      fail-fast: false
       matrix:
         include:
-          # ── OpenWrt 23.05.5 (opkg · .ipk) ───────────────────
-          # 使用具体稳定版本号，避免 SNAPSHOT 缺少 SDK 构建的 404 错误
-          - sdk: 23.05.5
-            arch: x86_64
-            luci_branch: openwrt-23.05
-
-          - sdk: 23.05.5
-            arch: aarch64_cortex-a53
-            luci_branch: openwrt-23.05
-
-          - sdk: 23.05.5
-            arch: arm_cortex-a7_neon-vfpv4
-            luci_branch: openwrt-23.05
-
-          - sdk: 23.05.5
-            arch: mipsel_24kc
-            luci_branch: openwrt-23.05
-
-          - sdk: 23.05.5
-            arch: mips_24kc
-            luci_branch: openwrt-23.05
-
-          # ── OpenWrt 24.10.0 (apk · .apk) ────────────────────
-          - sdk: 24.10.0
-            arch: x86_64
-            luci_branch: openwrt-24.10
-
-          - sdk: 24.10.0
-            arch: aarch64_cortex-a53
-            luci_branch: openwrt-24.10
-
-          - sdk: 24.10.0
-            arch: arm_cortex-a7_neon-vfpv4
-            luci_branch: openwrt-24.10
-
-          - sdk: 24.10.0
-            arch: mipsel_24kc
-            luci_branch: openwrt-24.10
+          # ── OpenWrt 23.05.5 (opkg · .ipk) ───────────────
+          - { sdk: 23.05.5, arch: x86_64 }
+          - { sdk: 23.05.5, arch: aarch64_cortex-a53 }
+          - { sdk: 23.05.5, arch: arm_cortex-a7_neon-vfpv4 }
+          - { sdk: 23.05.5, arch: mipsel_24kc }
+          - { sdk: 23.05.5, arch: mips_24kc }
+          # ── OpenWrt 24.10.0 (apk · .apk) ─────────────────
+          - { sdk: 24.10.0, arch: x86_64 }
+          - { sdk: 24.10.0, arch: aarch64_cortex-a53 }
+          - { sdk: 24.10.0, arch: arm_cortex-a7_neon-vfpv4 }
+          - { sdk: 24.10.0, arch: mipsel_24kc }
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # openwrt/gh-action-sdk 会自动：
-      #   1. 拉取对应版本/架构的 OpenWrt SDK Docker 镜像
-      #   2. 将仓库根目录下的各子目录作为本地 feed 注册
-      #   3. 安装 EXTRA_FEEDS 中指定的额外 feed（此处为 LuCI）
-      #   4. 编译 PACKAGES 列出的软件包
-      - name: 构建软件包
+      # 只编译 clientstatus，不需要 LuCI feed
+      - name: 构建 clientstatus 守护进程
         uses: openwrt/gh-action-sdk@v7
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
           FEEDNAME: clientstatus_feed
-          PACKAGES: clientstatus luci-app-clientstatus
-          # luci-app-clientstatus 依赖 feeds/luci/luci.mk，必须注入 LuCI feed
-          EXTRA_FEEDS: src-git luci https://git.openwrt.org/project/luci.git;${{ matrix.luci_branch }}
+          PACKAGES: clientstatus
           NO_REFRESH_CHECK: "true"
           IGNORE_ERRORS: "false"
 
       - name: 收集构建产物
         run: |
           mkdir -p artifacts
-          # 同时处理 .ipk (23.05) 和 .apk (24.10) 格式
-          find bin/packages/ \( -name "*.ipk" -o -name "*.apk" \) | while read -r f; do
-            cp "$f" artifacts/
-          done
-          echo "── 本次构建产物 (${{ matrix.arch }} · ${{ matrix.sdk }}) ──"
+          find bin/packages/ \( -name "clientstatus_*.ipk" -o -name "clientstatus_*.apk" \) \
+            | while read -r f; do cp "$f" artifacts/; done
+          echo "── 守护进程产物 (${{ matrix.arch }} · ${{ matrix.sdk }}) ──"
           ls -lh artifacts/
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          # 以 架构-版本 命名，避免不同矩阵间产物覆盖
-          name: packages-${{ matrix.arch }}-${{ matrix.sdk }}
+          name: daemon-${{ matrix.arch }}-${{ matrix.sdk }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+  # ════════════════════════════════════════════════════════
+  # Job 2: 打包 luci-app-clientstatus (LUCI_PKGARCH:=all)
+  # 每个 SDK 版本只需构建一次（x86_64），产物对所有架构通用
+  # 使用 GitHub 镜像替代不稳定的 git.openwrt.org
+  # ════════════════════════════════════════════════════════
+  build-luci:
+    name: LuCI App [${{ matrix.sdk }}]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { sdk: 23.05.5, arch: x86_64, luci_branch: openwrt-23.05 }
+          - { sdk: 24.10.0, arch: x86_64, luci_branch: openwrt-24.10 }
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 使用 GitHub 镜像（比 git.openwrt.org 在 Actions runner 上更稳定）
+      - name: 构建 luci-app-clientstatus (arch:all)
+        uses: openwrt/gh-action-sdk@v7
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
+          FEEDNAME: clientstatus_feed
+          PACKAGES: luci-app-clientstatus
+          EXTRA_FEEDS: src-git luci https://github.com/openwrt/luci.git;${{ matrix.luci_branch }}
+          NO_REFRESH_CHECK: "true"
+          IGNORE_ERRORS: "false"
+
+      - name: 收集构建产物
+        run: |
+          mkdir -p artifacts
+          find bin/packages/ \( -name "luci-app-clientstatus_*.ipk" -o -name "luci-app-clientstatus_*.apk" \) \
+            | while read -r f; do cp "$f" artifacts/; done
+          echo "── LuCI 产物 (${{ matrix.sdk }}) ──"
+          ls -lh artifacts/
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-${{ matrix.sdk }}
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
 
   # ════════════════════════════════════════════════════════
   # 发布任务：汇总所有产物，创建 GitHub Release
-  # 仅在推送 v* 标签时运行
   # ════════════════════════════════════════════════════════
   release:
     name: 发布 GitHub Release
-    needs: build
+    needs: [build-daemon, build-luci]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
@@ -114,8 +123,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: all-packages/
-          # merge-multiple=true：将多个 artifact 合并到同一目录
-          # 文件名含架构字段，不会冲突；all 架构的 luci-app 同名会被覆盖（内容一致）
           merge-multiple: true
 
       - name: 整理发布文件
