@@ -1,4 +1,4 @@
-﻿name: 构建 OpenWrt 软件包
+name: 构建 OpenWrt 软件包
 
 # ─── 触发条件 ────────────────────────────────────────────
 # 推送 v* 标签时自动构建并发布 Release；支持手动触发仅构建不发布
@@ -19,41 +19,42 @@ jobs:
       fail-fast: false   # 一个架构失败不影响其他
       matrix:
         include:
-          # ── OpenWrt 23.05 (opkg · .ipk) ──────────────────────
-          - sdk: openwrt-23.05
+          # ── OpenWrt 23.05.5 (opkg · .ipk) ───────────────────
+          # 使用具体稳定版本号，避免 SNAPSHOT 缺少 SDK 构建的 404 错误
+          - sdk: 23.05.5
             arch: x86_64
             luci_branch: openwrt-23.05
 
-          - sdk: openwrt-23.05
+          - sdk: 23.05.5
             arch: aarch64_cortex-a53
             luci_branch: openwrt-23.05
 
-          - sdk: openwrt-23.05
+          - sdk: 23.05.5
             arch: arm_cortex-a7_neon-vfpv4
             luci_branch: openwrt-23.05
 
-          - sdk: openwrt-23.05
+          - sdk: 23.05.5
             arch: mipsel_24kc
             luci_branch: openwrt-23.05
 
-          - sdk: openwrt-23.05
+          - sdk: 23.05.5
             arch: mips_24kc
             luci_branch: openwrt-23.05
 
-          # ── OpenWrt 24.10 (apk · .apk) ───────────────────────
-          - sdk: openwrt-24.10
+          # ── OpenWrt 24.10.0 (apk · .apk) ────────────────────
+          - sdk: 24.10.0
             arch: x86_64
             luci_branch: openwrt-24.10
 
-          - sdk: openwrt-24.10
+          - sdk: 24.10.0
             arch: aarch64_cortex-a53
             luci_branch: openwrt-24.10
 
-          - sdk: openwrt-24.10
+          - sdk: 24.10.0
             arch: arm_cortex-a7_neon-vfpv4
             luci_branch: openwrt-24.10
 
-          - sdk: openwrt-24.10
+          - sdk: 24.10.0
             arch: mipsel_24kc
             luci_branch: openwrt-24.10
 
