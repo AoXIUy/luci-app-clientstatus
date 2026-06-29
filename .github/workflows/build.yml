@@ -10,7 +10,7 @@ on:
 jobs:
   # ════════════════════════════════════════════════════════
   # Job 1: 编译 clientstatus C 守护进程
-  # 无需 LuCI feed，9 个架构并行
+  # 手动下载 SDK，只用 src-link 本地 feed，完全不访问 git.openwrt.org
   # ════════════════════════════════════════════════════════
   build-daemon:
     name: Daemon [${{ matrix.sdk }}] ${{ matrix.arch }}
@@ -20,40 +20,90 @@ jobs:
       matrix:
         include:
           # ── OpenWrt 23.05.5 (opkg · .ipk) ───────────────
-          - { sdk: 23.05.5, arch: x86_64 }
-          - { sdk: 23.05.5, arch: aarch64_cortex-a53 }
-          - { sdk: 23.05.5, arch: arm_cortex-a7_neon-vfpv4 }
-          - { sdk: 23.05.5, arch: mipsel_24kc }
-          - { sdk: 23.05.5, arch: mips_24kc }
-          # ── OpenWrt 24.10.0 (apk · .apk) ─────────────────
-          - { sdk: 24.10.0, arch: x86_64 }
-          - { sdk: 24.10.0, arch: aarch64_cortex-a53 }
-          - { sdk: 24.10.0, arch: arm_cortex-a7_neon-vfpv4 }
-          - { sdk: 24.10.0, arch: mipsel_24kc }
+          - sdk: 23.05.5
+            arch: x86_64
+            target: x86
+            subtarget: "64"
+          - sdk: 23.05.5
+            arch: aarch64_cortex-a53
+            target: rockchip
+            subtarget: armv8
+          - sdk: 23.05.5
+            arch: arm_cortex-a7_neon-vfpv4
+            target: sunxi
+            subtarget: cortexa7
+          - sdk: 23.05.5
+            arch: mipsel_24kc
+            target: ramips
+            subtarget: mt7621
+          - sdk: 23.05.5
+            arch: mips_24kc
+            target: ath79
+            subtarget: generic
+          # ── OpenWrt 24.10.0 (apk · .apk) ────────────────
+          - sdk: 24.10.0
+            arch: x86_64
+            target: x86
+            subtarget: "64"
+          - sdk: 24.10.0
+            arch: aarch64_cortex-a53
+            target: rockchip
+            subtarget: armv8
+          - sdk: 24.10.0
+            arch: arm_cortex-a7_neon-vfpv4
+            target: sunxi
+            subtarget: cortexa7
+          - sdk: 24.10.0
+            arch: mipsel_24kc
+            target: ramips
+            subtarget: mt7621
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # 只编译 clientstatus，不需要 LuCI feed
-      - name: 构建 clientstatus 守护进程
-        uses: openwrt/gh-action-sdk@v7
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: clientstatus_feed
-          PACKAGES: clientstatus
-          NO_REFRESH_CHECK: "true"
-          IGNORE_ERRORS: "false"
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y build-essential libncurses5-dev python3 rsync zstd
 
-      - name: 收集构建产物
+      - name: 下载 OpenWrt SDK
+        run: |
+          BASE="https://downloads.openwrt.org/releases/${{ matrix.sdk }}/targets/${{ matrix.target }}/${{ matrix.subtarget }}"
+          wget -q "${BASE}/sha256sums"
+          # 从 sha256sums 自动解析 SDK 文件名，无需硬编码 GCC 版本
+          SDK_FILE=$(grep -o 'openwrt-sdk[^[:space:]]*\.tar\.[a-z]*' sha256sums | head -1)
+          echo "SDK_FILE=${SDK_FILE}" >> "${GITHUB_ENV}"
+          wget -nv "${BASE}/${SDK_FILE}"
+          sha256sum --check --ignore-missing sha256sums
+
+      - name: 解压 SDK
+        run: |
+          tar -xaf "${SDK_FILE}"
+          mv openwrt-sdk-* sdk
+
+      - name: 配置 Feeds（仅 src-link，完全跳过 git.openwrt.org）
+        working-directory: sdk
+        run: |
+          # 只注册本地 src-link，feeds update 无需网络
+          printf 'src-link clientstatus_feed %s\n' "${GITHUB_WORKSPACE}" > feeds.conf
+          ./scripts/feeds update clientstatus_feed
+          ./scripts/feeds install -a -p clientstatus_feed
+
+      - name: 编译 clientstatus
+        working-directory: sdk
+        run: |
+          make defconfig
+          make package/clientstatus/compile -j$(nproc) V=s 2>&1 | tail -50
+
+      - name: 收集产物
         run: |
           mkdir -p artifacts
-          find bin/packages/ \( -name "clientstatus_*.ipk" -o -name "clientstatus_*.apk" \) \
-            | while read -r f; do cp "$f" artifacts/; done
-          echo "── 守护进程产物 (${{ matrix.arch }} · ${{ matrix.sdk }}) ──"
+          find sdk/bin/ \( -name "clientstatus_*.ipk" -o -name "clientstatus_*.apk" \) \
+            -exec cp -v {} artifacts/ \;
           ls -lh artifacts/
 
-      - name: 上传构建产物
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: daemon-${{ matrix.arch }}-${{ matrix.sdk }}
@@ -62,44 +112,82 @@ jobs:
           retention-days: 30
 
   # ════════════════════════════════════════════════════════
-  # Job 2: 打包 luci-app-clientstatus (LUCI_PKGARCH:=all)
-  # 每个 SDK 版本只需构建一次（x86_64），产物对所有架构通用
-  # 使用 GitHub 镜像替代不稳定的 git.openwrt.org
+  # Job 2: 打包 luci-app-clientstatus (arch:all)
+  # 只下载单个 luci.mk 文件，不克隆整个 LuCI 仓库
+  # 每个 SDK 版本只需构建一次（x86_64），产物全架构通用
   # ════════════════════════════════════════════════════════
   build-luci:
-    name: LuCI App [${{ matrix.sdk }}]
+    name: LuCI [${{ matrix.sdk }}]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { sdk: 23.05.5, arch: x86_64, luci_branch: openwrt-23.05 }
-          - { sdk: 24.10.0, arch: x86_64, luci_branch: openwrt-24.10 }
+          - sdk: 23.05.5
+            target: x86
+            subtarget: "64"
+            luci_branch: openwrt-23.05
+          - sdk: 24.10.0
+            target: x86
+            subtarget: "64"
+            luci_branch: openwrt-24.10
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # 使用 GitHub 镜像（比 git.openwrt.org 在 Actions runner 上更稳定）
-      - name: 构建 luci-app-clientstatus (arch:all)
-        uses: openwrt/gh-action-sdk@v7
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.sdk }}
-          FEEDNAME: clientstatus_feed
-          PACKAGES: luci-app-clientstatus
-          EXTRA_FEEDS: src-git luci https://github.com/openwrt/luci.git;${{ matrix.luci_branch }}
-          NO_REFRESH_CHECK: "true"
-          IGNORE_ERRORS: "false"
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y build-essential libncurses5-dev python3 rsync zstd
 
-      - name: 收集构建产物
+      - name: 下载 OpenWrt SDK (x86_64)
+        run: |
+          BASE="https://downloads.openwrt.org/releases/${{ matrix.sdk }}/targets/${{ matrix.target }}/${{ matrix.subtarget }}"
+          wget -q "${BASE}/sha256sums"
+          SDK_FILE=$(grep -o 'openwrt-sdk[^[:space:]]*\.tar\.[a-z]*' sha256sums | head -1)
+          echo "SDK_FILE=${SDK_FILE}" >> "${GITHUB_ENV}"
+          wget -nv "${BASE}/${SDK_FILE}"
+          sha256sum --check --ignore-missing sha256sums
+
+      - name: 解压 SDK
+        run: |
+          tar -xaf "${SDK_FILE}"
+          mv openwrt-sdk-* sdk
+
+      - name: 下载 luci.mk（仅单文件，不克隆整个 LuCI 仓库）
+        run: |
+          mkdir -p /tmp/luci-feed
+          # luci.mk 只依赖 SDK 自带的 rules.mk 和 include/*.mk，单文件即可
+          curl -fsSL \
+            "https://raw.githubusercontent.com/openwrt/luci/${{ matrix.luci_branch }}/luci.mk" \
+            -o /tmp/luci-feed/luci.mk
+          echo "=== luci.mk 前 5 行 ==="
+          head -5 /tmp/luci-feed/luci.mk
+
+      - name: 配置 Feeds
+        working-directory: sdk
+        run: |
+          printf 'src-link clientstatus_feed %s\n' "${GITHUB_WORKSPACE}" > feeds.conf
+          printf 'src-link luci %s\n' "/tmp/luci-feed" >> feeds.conf
+          # 只更新指定 feed，不访问 git.openwrt.org
+          ./scripts/feeds update clientstatus_feed luci
+          ./scripts/feeds install -a -p clientstatus_feed
+
+      - name: 编译 luci-app-clientstatus
+        working-directory: sdk
+        run: |
+          make defconfig
+          make package/luci-app-clientstatus/compile -j$(nproc) V=s 2>&1 | tail -50
+
+      - name: 收集产物
         run: |
           mkdir -p artifacts
-          find bin/packages/ \( -name "luci-app-clientstatus_*.ipk" -o -name "luci-app-clientstatus_*.apk" \) \
-            | while read -r f; do cp "$f" artifacts/; done
-          echo "── LuCI 产物 (${{ matrix.sdk }}) ──"
+          find sdk/bin/ \( -name "luci-app-clientstatus_*.ipk" -o -name "luci-app-clientstatus_*.apk" \) \
+            -exec cp -v {} artifacts/ \;
           ls -lh artifacts/
 
-      - name: 上传构建产物
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: luci-${{ matrix.sdk }}
@@ -119,7 +207,7 @@ jobs:
       contents: write
 
     steps:
-      - name: 下载所有架构的构建产物
+      - name: 下载所有产物
         uses: actions/download-artifact@v4
         with:
           path: all-packages/
