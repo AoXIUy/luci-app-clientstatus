@@ -81,6 +81,8 @@ jobs:
         run: |
           mkdir sdk
           tar -xaf "${SDK_FILE}" --strip-components=1 -C sdk
+
+      - name: 更新 feeds
         working-directory: sdk
         run: |
           # 只注册本地 src-link，feeds update 无需网络
