@@ -93,9 +93,12 @@ jobs:
       - name: 编译 clientstatus
         working-directory: sdk
         run: |
-          # 24.10+ SDK 默认产出 .apk，23.05 产出 .ipk，defconfig 自动处理，无需手动设置
           make defconfig
-          make package/clientstatus/compile -j$(nproc) V=s 2>&1 | tail -80
+          if [[ "${{ matrix.sdk }}" == "24.10.1" ]]; then
+            echo "CONFIG_USE_APK=y" >> .config
+            make defconfig
+          fi
+          make package/clientstatus/compile -j$(nproc) V=s USE_APK=1 2>&1 | tail -80
 
       - name: 收集产物
         run: |
@@ -181,9 +184,12 @@ jobs:
       - name: 编译 luci-app-clientstatus
         working-directory: sdk
         run: |
-          # 24.10+ SDK 默认产出 .apk，23.05 产出 .ipk，defconfig 自动处理
           make defconfig
-          make package/luci-app-clientstatus/compile -j$(nproc) V=s 2>&1 | tail -80
+          if [[ "${{ matrix.sdk }}" == "24.10.1" ]]; then
+            echo "CONFIG_USE_APK=y" >> .config
+            make defconfig
+          fi
+          make package/luci-app-clientstatus/compile -j$(nproc) V=s USE_APK=1 2>&1 | tail -80
 
       - name: 收集产物
         run: |
