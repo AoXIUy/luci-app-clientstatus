@@ -40,20 +40,20 @@ jobs:
             arch: mips_24kc
             target: ath79
             subtarget: generic
-          # ── OpenWrt 24.10.1 (apk · .apk) ────────────────
-          - sdk: 24.10.1
+          # ── OpenWrt 25.12.5 (apk · .apk) ────────────────
+          - sdk: 25.12.5
             arch: x86_64
             target: x86
             subtarget: "64"
-          - sdk: 24.10.1
+          - sdk: 25.12.5
             arch: aarch64_generic
             target: rockchip
             subtarget: armv8
-          - sdk: 24.10.1
+          - sdk: 25.12.5
             arch: arm_cortex-a7_neon-vfpv4
             target: sunxi
             subtarget: cortexa7
-          - sdk: 24.10.1
+          - sdk: 25.12.5
             arch: mipsel_24kc
             target: ramips
             subtarget: mt7621
@@ -94,7 +94,7 @@ jobs:
         working-directory: sdk
         run: |
           make defconfig
-          if [[ "${{ matrix.sdk }}" == "24.10.1" ]]; then
+          if [[ "${{ matrix.sdk }}" == "25.12.5" ]]; then
             echo "CONFIG_USE_APK=y" >> .config
             make defconfig
           fi
@@ -134,10 +134,10 @@ jobs:
             target: x86
             subtarget: "64"
             luci_branch: openwrt-23.05
-          - sdk: 24.10.1
+          - sdk: 25.12.5
             target: x86
             subtarget: "64"
-            luci_branch: openwrt-24.10
+            luci_branch: openwrt-25.12
 
     steps:
       - name: 检出代码
@@ -185,7 +185,7 @@ jobs:
         working-directory: sdk
         run: |
           make defconfig
-          if [[ "${{ matrix.sdk }}" == "24.10.1" ]]; then
+          if [[ "${{ matrix.sdk }}" == "25.12.5" ]]; then
             echo "CONFIG_USE_APK=y" >> .config
             make defconfig
           fi
@@ -244,19 +244,19 @@ jobs:
             ## 📦 软件包说明
 
             本 Release 包含 `clientstatus` 守护进程和 `luci-app-clientstatus` 界面两个软件包，
-            支持 OpenWrt **23.05**（`.ipk`）和 **24.10+**（`.apk`）两种格式。
+            支持 OpenWrt **23.05**（`.ipk`）和 **25.12+**（`.apk`）两种格式。
 
             ---
 
             ### 安装方法
 
-            **OpenWrt 23.05 — opkg**
+            **OpenWrt 23.05 / 24.10 — opkg**
             ```sh
             opkg install clientstatus_*.ipk
             opkg install luci-app-clientstatus_*.ipk
             ```
 
-            **OpenWrt 24.10+ — apk**
+            **OpenWrt 25.12+ — apk**
             ```sh
             apk add --allow-untrusted clientstatus_*.apk
             apk add --allow-untrusted luci-app-clientstatus_*.apk
