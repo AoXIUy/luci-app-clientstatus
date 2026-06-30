@@ -26,8 +26,8 @@ jobs:
             subtarget: "64"
           - sdk: 23.05.5
             arch: aarch64_generic
-            target: armvirt
-            subtarget: "64"
+            target: rockchip
+            subtarget: armv8
           - sdk: 23.05.5
             arch: arm_cortex-a7_neon-vfpv4
             target: sunxi
@@ -47,8 +47,8 @@ jobs:
             subtarget: "64"
           - sdk: 24.10.1
             arch: aarch64_generic
-            target: armvirt
-            subtarget: "64"
+            target: rockchip
+            subtarget: armv8
           - sdk: 24.10.1
             arch: arm_cortex-a7_neon-vfpv4
             target: sunxi
