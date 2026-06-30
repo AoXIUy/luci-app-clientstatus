@@ -93,8 +93,11 @@ jobs:
       - name: 编译 clientstatus
         working-directory: sdk
         run: |
+          if [[ "${{ matrix.sdk }}" == "24.10.0" ]]; then
+            echo "CONFIG_USE_APK=y" >> .config
+          fi
           make defconfig
-          make package/clientstatus/compile -j$(nproc) V=s 2>&1 | tail -50
+          make package/clientstatus/compile -j$(nproc) V=s USE_APK=1 2>&1 | tail -50
 
       - name: 收集产物
         run: |
@@ -177,8 +180,11 @@ jobs:
       - name: 编译 luci-app-clientstatus
         working-directory: sdk
         run: |
+          if [[ "${{ matrix.sdk }}" == "24.10.0" ]]; then
+            echo "CONFIG_USE_APK=y" >> .config
+          fi
           make defconfig
-          make package/luci-app-clientstatus/compile -j$(nproc) V=s 2>&1 | tail -50
+          make package/luci-app-clientstatus/compile -j$(nproc) V=s USE_APK=1 2>&1 | tail -50
 
       - name: 收集产物
         run: |
