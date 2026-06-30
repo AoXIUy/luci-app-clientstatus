@@ -25,9 +25,9 @@ jobs:
             target: x86
             subtarget: "64"
           - sdk: 23.05.5
-            arch: aarch64_cortex-a53
-            target: rockchip
-            subtarget: armv8
+            arch: aarch64_generic
+            target: armvirt
+            subtarget: "64"
           - sdk: 23.05.5
             arch: arm_cortex-a7_neon-vfpv4
             target: sunxi
@@ -40,20 +40,20 @@ jobs:
             arch: mips_24kc
             target: ath79
             subtarget: generic
-          # ── OpenWrt 24.10.0 (apk · .apk) ────────────────
-          - sdk: 24.10.0
+          # ── OpenWrt 24.10.1 (apk · .apk) ────────────────
+          - sdk: 24.10.1
             arch: x86_64
             target: x86
             subtarget: "64"
-          - sdk: 24.10.0
-            arch: aarch64_cortex-a53
-            target: rockchip
-            subtarget: armv8
-          - sdk: 24.10.0
+          - sdk: 24.10.1
+            arch: aarch64_generic
+            target: armvirt
+            subtarget: "64"
+          - sdk: 24.10.1
             arch: arm_cortex-a7_neon-vfpv4
             target: sunxi
             subtarget: cortexa7
-          - sdk: 24.10.0
+          - sdk: 24.10.1
             arch: mipsel_24kc
             target: ramips
             subtarget: mt7621
@@ -93,18 +93,19 @@ jobs:
       - name: 编译 clientstatus
         working-directory: sdk
         run: |
-          if [[ "${{ matrix.sdk }}" == "24.10.0" ]]; then
-            echo "CONFIG_USE_APK=y" >> .config
-          fi
+          # 24.10+ SDK 默认产出 .apk，23.05 产出 .ipk，defconfig 自动处理，无需手动设置
           make defconfig
-          make package/clientstatus/compile -j$(nproc) V=s USE_APK=1 2>&1 | tail -50
+          make package/clientstatus/compile -j$(nproc) V=s 2>&1 | tail -80
 
       - name: 收集产物
         run: |
           mkdir -p artifacts
           find sdk/bin/ \( -name "clientstatus_*.ipk" -o -name "clientstatus_*.apk" \) \
             -exec cp -v {} artifacts/ \;
+          echo "=== 产物列表 ==="
           ls -lh artifacts/
+          # 若产物为空则立即报错，防止无声失败
+          [ "$(ls -A artifacts/)" ] || { echo "ERROR: 未找到任何产物！"; exit 1; }
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
@@ -130,7 +131,7 @@ jobs:
             target: x86
             subtarget: "64"
             luci_branch: openwrt-23.05
-          - sdk: 24.10.0
+          - sdk: 24.10.1
             target: x86
             subtarget: "64"
             luci_branch: openwrt-24.10
@@ -180,18 +181,18 @@ jobs:
       - name: 编译 luci-app-clientstatus
         working-directory: sdk
         run: |
-          if [[ "${{ matrix.sdk }}" == "24.10.0" ]]; then
-            echo "CONFIG_USE_APK=y" >> .config
-          fi
+          # 24.10+ SDK 默认产出 .apk，23.05 产出 .ipk，defconfig 自动处理
           make defconfig
-          make package/luci-app-clientstatus/compile -j$(nproc) V=s USE_APK=1 2>&1 | tail -50
+          make package/luci-app-clientstatus/compile -j$(nproc) V=s 2>&1 | tail -80
 
       - name: 收集产物
         run: |
           mkdir -p artifacts
           find sdk/bin/ \( -name "luci-app-clientstatus_*.ipk" -o -name "luci-app-clientstatus_*.apk" \) \
             -exec cp -v {} artifacts/ \;
+          echo "=== 产物列表 ==="
           ls -lh artifacts/
+          [ "$(ls -A artifacts/)" ] || { echo "ERROR: 未找到任何产物！"; exit 1; }
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
@@ -266,7 +267,7 @@ jobs:
             | 架构 | 代表设备 |
             |---|---|
             | `x86_64` | x86 软路由、PVE / ESXi 虚拟机 |
-            | `aarch64_cortex-a53` | RaspberryPi 3/4、NanoPi R4S、BPi-R3 |
+            | `aarch64_generic` | ARMv8 通用（QEMU、RaspberryPi 3/4、各类 arm64 板子）|
             | `arm_cortex-a7_neon-vfpv4` | MT7622、联发科 ARM 系列 |
             | `mipsel_24kc` | MT7620 / MT7628（极路由等）|
             | `mips_24kc` | Atheros AR71xx（TP-Link 经典款）|
