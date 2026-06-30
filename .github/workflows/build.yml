@@ -44,7 +44,7 @@ jobs:
           - sdk: 25.12.5
             arch: x86_64
             target: x86
-            subtarget: "64"
+            subtarget: generic
           - sdk: 25.12.5
             arch: aarch64_generic
             target: rockchip
@@ -136,7 +136,7 @@ jobs:
             luci_branch: openwrt-23.05
           - sdk: 25.12.5
             target: x86
-            subtarget: "64"
+            subtarget: generic
             luci_branch: openwrt-25.12
 
     steps:
